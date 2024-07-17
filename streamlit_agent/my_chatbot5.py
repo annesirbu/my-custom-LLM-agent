@@ -64,7 +64,7 @@ prompt = ChatPromptTemplate.from_messages(
     ]
 )
 
-chain = prompt | ChatOpenAI(api_key=openai_api_key)
+chain = prompt | ChatOpenAI(api_key=openai_api_key, model="gpt-3.5-turbo")
 chain_with_history = RunnableWithMessageHistory(
     chain,
     lambda session_id: msgs,
@@ -73,7 +73,7 @@ chain_with_history = RunnableWithMessageHistory(
 )
 
 # Setup agent for SQL
-llm = OpenAI(api_key=openai_api_key, temperature=0, streaming=True)
+llm = OpenAI(api_key=openai_api_key, model="gpt-3.5-turbo", temperature=0, streaming=True)
 
 
 @st.cache_resource(ttl="2h")
