@@ -17,6 +17,19 @@ from langchain_community.chat_message_histories import StreamlitChatMessageHisto
 from langchain_community.agent_toolkits import create_sql_agent, SQLDatabaseToolkit
 from langchain.agents.agent_types import AgentType
 import tiktoken
+import subprocess
+import sys
+
+
+def install_package(package):
+    subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+
+
+try:
+    import openpyxl
+except ImportError:
+    install_package("openpyxl")
+
 
 st.set_page_config(page_title="Custom LLM with Excel DB")
 st.title("Custom LLM with Excel DB 📈")
@@ -190,15 +203,9 @@ def excel_to_sqlite(file_path):
 
     # Create a writable SQLite database connection first
     con = sqlite3.connect(db_path)
-    xls = pd.ExcelFile(file_path)
-    for sheet_name in xls.sheet_names:
-        df = xls.parse(sheet_name)
-
-        # Ensure 'Order Date' is in the correct datetime format
-        if "Order Date" in df.columns:
-            df["Order Date"] = pd.to_datetime(df["Order Date"], errors="coerce").dt.strftime(
-                "%Y-%m-%d %H:%M:%S"
-            )
+    xlsx = pd.ExcelFile(file_path)
+    for sheet_name in xlsx.sheet_names:
+        df = xlsx.parse(sheet_name)
 
         df.to_sql(sheet_name, con, index=False, if_exists="replace")  # Load each sheet into SQLite
     con.close()

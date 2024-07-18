@@ -1,0 +1,6 @@
+streamlit
+pandas
+openpyxl
+sqlite3
+sqlalchemy
+tiktoken
