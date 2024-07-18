@@ -18,14 +18,6 @@ from langchain_community.agent_toolkits import create_sql_agent, SQLDatabaseTool
 from langchain.agents.agent_types import AgentType
 import tiktoken
 
-# Ensure openpyxl is installed
-try:
-    import openpyxl
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "openpyxl"])
-    import openpyxl
-
-
 st.set_page_config(page_title="Custom LLM with Excel DB")
 st.title("Custom LLM with Excel DB 📈")
 
