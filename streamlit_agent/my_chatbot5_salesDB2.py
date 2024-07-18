@@ -18,6 +18,53 @@ from langchain_community.agent_toolkits import create_sql_agent, SQLDatabaseTool
 from langchain.agents.agent_types import AgentType
 import tiktoken
 
+# Database connection
+conn = sqlite3.connect("interactions.db")
+c = conn.cursor()
+
+# Create table if it doesn't exist
+c.execute(
+    """
+    CREATE TABLE IF NOT EXISTS interactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_query TEXT,
+        assistant_response TEXT,
+        intermediate_steps TEXT,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+        explanation_clicked BOOLEAN DEFAULT 0
+    )
+"""
+)
+conn.commit()
+
+
+# Function to save interaction
+def save_interaction(user_query, assistant_response, intermediate_steps):
+    c.execute(
+        """
+        INSERT INTO interactions (user_query, assistant_response, intermediate_steps)
+        VALUES (?, ?, ?)
+    """,
+        (user_query, assistant_response, intermediate_steps),
+    )
+    conn.commit()
+    return c.lastrowid
+
+
+# Function to update explanation clicked
+def update_explanation_clicked(interaction_id):
+    c.execute(
+        """
+        UPDATE interactions
+        SET explanation_clicked = 1
+        WHERE id = ?
+    """,
+        (interaction_id,),
+    )
+    conn.commit()
+
+
+# Streamlit app setup
 st.set_page_config(page_title="Custom LLM with Excel DB")
 st.title("Custom LLM with Excel DB 📈")
 
@@ -57,7 +104,7 @@ def truncate_messages(messages, max_tokens):
 
 
 # Detailed instructions for the AI on how to interact with the SQL database
-prefix = f"""
+prefix = """
 You are an agent designed to interact with a SQL database.
 Given an input question, create a syntactically correct SQLite query to run, then look at the results of the query and return the answer.
 Unless the user specifies a specific number of examples they wish to obtain, always limit your query to at most 5 results.
@@ -108,50 +155,6 @@ When Formatting Responses:
 - Clearly format financial figures on separate lines for readability using new lines.
 - If the output is too large, display only the first 5 entries by default and inform the user.
 - If the question does not seem related to the database, just return "The query does not relate to the database" as the answer.
-
-
-For example:
-User: What are the total sales and profit for the "Office Supplies" category in 2021?
-SQL Agent: The total sales for the "Office Supplies" category in 2021 is 183,939.98 dollars.
-The total profit for the "Office Supplies" category in 2021 is 35,061.23 dollars.
-
-Another example:
-User: Find the orders from the "West" region along with the name of the regional manager.
-SQL Agent: Here are the first 5 orders from the "West" region along with the name of the regional manager:
-
-Order ID: CA-2021-138688
-Product Name: Self-Adhesive Address Labels for Typewriters by Universal
-Sales: 14.62 dollars
-Profit: 6.87 dollars
-Regional Manager: Sadie Pawthorne
-
-Order ID: CA-2019-115812
-Product Name: Eldon Expressions Wood and Plastic Desk Accessories, Cherry Wood
-Sales: 48.86 dollars
-Profit: 14.17 dollars
-Regional Manager: Sadie Pawthorne
-
-Order ID: CA-2019-115812
-Product Name: Newell 322
-Sales: 7.28 dollars
-Profit: 1.97 dollars
-Regional Manager: Sadie Pawthorne
-
-Order ID: CA-2019-115812
-Product Name: Mitel 5320 IP Phone VoIP phone
-Sales: 907.15 dollars
-Profit: 90.72 dollars
-Regional Manager: Sadie Pawthorne
-
-Order ID: CA-2019-115812
-Product Name: DXL Angle-View Binders with Locking Rings by Samsill
-Sales: 18.50 dollars
-Profit: 5.78 dollars
-Regional Manager: Sadie Pawthorne
-
-If you need more entries, please specify the number of entries you want to retrieve.
-
-Additionally, provide clear and concise natural language explanations in the intermediate_steps for each step you take and the reasons behind those actions. This will help non-programmers understand your thought process and how you arrived at the final answer.
 """
 
 # Additional instructions for the AI on the next steps after receiving the input question
@@ -239,10 +242,28 @@ if "messages" not in st.session_state or st.sidebar.button(
 # Display all messages from the session state
 for msg in st.session_state.messages:
     if "expander" in msg:
-        with st.expander(msg["expander"]):
-            st.write(msg["content"])
+        interaction_id = msg.get("interaction_id")
+        if st.session_state.get(f"expander_{interaction_id}", False):
+            with st.expander(msg["expander"]):
+                st.write(msg["content"])
+        else:
+            if st.button(
+                "See explanation",
+                key=f"button_{interaction_id}",
+                on_click=lambda: handle_explanation_click(interaction_id),
+            ):
+                st.session_state[f"expander_{interaction_id}"] = True
+                with st.expander(msg["expander"]):
+                    st.write(msg["content"])
     else:
         st.chat_message(msg["role"]).write(msg["content"])
+
+
+# Function to handle explanation click event
+def handle_explanation_click(interaction_id):
+    update_explanation_clicked(interaction_id)
+    st.session_state[f"expander_{interaction_id}"] = True
+
 
 # Get user query from the chat input
 user_query = st.chat_input(placeholder="Ask me anything from the database!")
@@ -344,6 +365,10 @@ if user_query:
     # Prettify intermediate steps
     inter_steps = response["intermediate_steps"]
 
+    interaction_id = save_interaction(
+        user_query, response_content, prettify_intermediate_steps(inter_steps)
+    )
+
     if inter_steps:
         prettified_inter_steps = prettify_intermediate_steps(inter_steps)
 
@@ -352,30 +377,39 @@ if user_query:
         st.session_state.messages.append(
             {
                 "role": "assistant",
-                "expander": "**See explanation**",
+                "expander": "See explanation",
                 "content": prettified_inter_steps,
+                "interaction_id": interaction_id,
             }
         )
 
-        # Display intermediate steps in an expander
-        with st.expander("**See explanation**"):
-            st.write(prettified_inter_steps)
+        # Display intermediate steps with a button to see the explanation
+        if st.button(
+            "See explanation",
+            key=f"button_{interaction_id}",
+            on_click=lambda: handle_explanation_click(interaction_id),
+        ):
+            st.session_state[f"expander_{interaction_id}"] = True
+            with st.expander("See explanation"):
+                st.write(prettified_inter_steps)
     else:
         # Display message if no intermediate steps are provided
         no_explanation_message = (
-            "**The agent does not provide any further explanations for its response.**"
+            "**The agent does not provide any further explanation for its response.**"
         )
         st.session_state.messages.append(
             {
                 "role": "assistant",
-                "expander": "**See explanation**",
+                "expander": "See explanation",
                 "content": no_explanation_message,
+                "interaction_id": interaction_id,
             }
         )
-        with st.expander("**See explanation**"):
-            st.write(no_explanation_message)
-
-
-# Draw the messages at the end, so newly generated ones show up immediately
-# with view_messages:
-#    view_messages.json(st.session_state.langchain_messages)
+        if st.button(
+            "See explanation",
+            key=f"button_{interaction_id}",
+            on_click=lambda: handle_explanation_click(interaction_id),
+        ):
+            st.session_state[f"expander_{interaction_id}"] = True
+            with st.expander("See explanation"):
+                st.write(no_explanation_message)
