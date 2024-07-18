@@ -1,6 +1,8 @@
 streamlit
 pandas
 openpyxl
-sqlite3
 sqlalchemy
 tiktoken
+langchain-core
+langchain-openai
+langchain-community
