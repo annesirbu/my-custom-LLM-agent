@@ -15,12 +15,16 @@ from langchain_openai import ChatOpenAI
 from langchain_community.utilities import SQLDatabase
 from langchain_community.chat_message_histories import StreamlitChatMessageHistory
 from langchain_community.agent_toolkits import create_sql_agent, SQLDatabaseToolkit
-from langchain.agents.agent_types import AgentType
+
+# from langchain.agents.agent_types import AgentType
 import tiktoken
 import subprocess
 import sys
+import uuid
+import openai
 
 
+# Ensure necessary packages are installed
 def install_package(package):
     subprocess.check_call([sys.executable, "-m", "pip", "install", package])
 
@@ -30,9 +34,117 @@ try:
 except ImportError:
     install_package("openpyxl")
 
+# Database connection
+conn = sqlite3.connect("interactions.db")
+c = conn.cursor()
 
+# Alter the table to include the new timestamp columns if they do not exist
+c.execute(
+    """
+    CREATE TABLE IF NOT EXISTS interactions (
+        session_id TEXT,
+        id INTEGER,
+        user_query TEXT,
+        assistant_response TEXT,
+        intermediate_steps TEXT,
+        simplified_intermediate_steps TEXT,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+        user_query_sent_time DATETIME,
+        response_displayed_time DATETIME,
+        explanation_button_displayed_time DATETIME,
+        explanation_clicked_time DATETIME,
+        explanation_clicked BOOLEAN DEFAULT 0
+    )
+"""
+)
+
+# Check if the new timestamp columns exist and add them if not
+c.execute("PRAGMA table_info(interactions)")
+columns = [column[1] for column in c.fetchall()]
+new_columns = [
+    "user_query_sent_time",
+    "response_displayed_time",
+    "explanation_button_displayed_time",
+    "explanation_clicked_time",
+]
+for col in new_columns:
+    if col not in columns:
+        c.execute(f"ALTER TABLE interactions ADD COLUMN {col} DATETIME")
+conn.commit()
+
+
+# Function to save interaction
+def save_interaction(
+    session_id,
+    question_id,
+    user_query,
+    assistant_response,
+    intermediate_steps,
+    simplified_intermediate_steps,
+    user_query_sent_time,
+    response_displayed_time,
+    explanation_button_displayed_time,
+):
+    intermediate_steps_str = str(intermediate_steps)  # Convert to string
+    simplified_intermediate_steps_str = str(simplified_intermediate_steps)  # Convert to string
+    user_query_sent_time_str = (
+        user_query_sent_time.strftime("%Y-%m-%d %H:%M:%S") if user_query_sent_time else None
+    )
+    response_displayed_time_str = (
+        response_displayed_time.strftime("%Y-%m-%d %H:%M:%S") if response_displayed_time else None
+    )
+    explanation_button_displayed_time_str = (
+        explanation_button_displayed_time.strftime("%Y-%m-%d %H:%M:%S")
+        if explanation_button_displayed_time
+        else None
+    )
+
+    c.execute(
+        """
+        INSERT INTO interactions (session_id, id, user_query, assistant_response, intermediate_steps, simplified_intermediate_steps, user_query_sent_time, response_displayed_time, explanation_button_displayed_time)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """,
+        (
+            session_id,
+            question_id,
+            user_query,
+            assistant_response,
+            intermediate_steps_str,
+            simplified_intermediate_steps_str,
+            user_query_sent_time_str,
+            response_displayed_time_str,
+            explanation_button_displayed_time_str,
+        ),
+    )
+    conn.commit()
+
+
+# Function to update explanation clicked
+def update_explanation_clicked(session_id, question_id):
+    c.execute(
+        """
+        UPDATE interactions
+        SET explanation_clicked = 1, explanation_clicked_time = CURRENT_TIMESTAMP
+        WHERE session_id = ? AND id = ?
+    """,
+        (session_id, question_id),
+    )
+    conn.commit()
+
+
+# Streamlit app setup
 st.set_page_config(page_title="Data Assistant")
 st.title("Data Assistant 📈")
+
+# Assign a unique session ID if it doesn't exist
+if "session_id" not in st.session_state:
+    st.session_state["session_id"] = str(uuid.uuid4())
+
+# Initialize question counter for the session
+if "question_counter" not in st.session_state:
+    st.session_state["question_counter"] = 0
+
+session_id = st.session_state["session_id"]
 
 # Get an OpenAI API Key from secrets.toml
 if "openai_api_key" in st.secrets:
@@ -70,7 +182,7 @@ def truncate_messages(messages, max_tokens):
 
 
 # Detailed instructions for the AI on how to interact with the SQL database
-prefix = f"""
+prefix = """
 You are an agent designed to interact with a SQL database.
 Given an input question, create a syntactically correct SQLite query to run, then look at the results of the query and return the answer.
 Unless the user specifies a specific number of examples they wish to obtain, always limit your query to at most 5 results.
@@ -122,8 +234,6 @@ When Formatting Responses:
 - Clearly format financial figures on separate lines for readability using new lines.
 - If the output is too large, display only the first 5 entries by default and inform the user.
 - If the question does not seem related to the database, just return "The query does not relate to the database" as the answer.
-
-
 For example:
 User: What are the total sales and profit for the "Office Supplies" category in 2021?
 SQL Agent: The total sales for the "Office Supplies" category in 2021 is 183,939.98 dollars.
@@ -204,9 +314,9 @@ def excel_to_sqlite(file_path):
 
     # Create a writable SQLite database connection first
     con = sqlite3.connect(db_path)
-    xlsx = pd.ExcelFile(file_path)
-    for sheet_name in xlsx.sheet_names:
-        df = xlsx.parse(sheet_name)
+    xls = pd.ExcelFile(file_path)
+    for sheet_name in xls.sheet_names:
+        df = xls.parse(sheet_name)
 
         df.to_sql(sheet_name, con, index=False, if_exists="replace")  # Load each sheet into SQLite
     con.close()
@@ -235,6 +345,7 @@ agent = create_sql_agent(
 
 def clear_message_history():
     st.session_state.pop("messages", None)
+    st.session_state["question_counter"] = 0
     msgs.clear()
 
 
@@ -244,16 +355,49 @@ if "messages" not in st.session_state or st.sidebar.button(
 ):
     st.session_state["messages"] = [{"role": "assistant", "content": "How can I help you?"}]
 
+
+# Function to handle explanation click event
+def handle_explanation_click(interaction_id):
+    update_explanation_clicked(session_id, interaction_id)
+    st.session_state[f"expander_{interaction_id}"] = True
+
+
 # Display all messages from the session state
-for msg in st.session_state.messages:
+for msg in st.session_state.get("messages", []):
     if "expander" in msg:
-        with st.expander(msg["expander"]):
-            st.write(msg["content"])
+        interaction_id = msg.get("interaction_id")
+        if st.session_state.get(f"expander_{interaction_id}", False):
+            with st.expander(msg["expander"], expanded=True):
+                st.write(msg["content"])
+        else:
+            if st.button(
+                "See explanation",
+                key=f"button_{interaction_id}",
+                on_click=lambda id=interaction_id: handle_explanation_click(id),
+            ):
+                st.session_state[f"expander_{interaction_id}"] = True
+                with st.expander(msg["expander"], expanded=True):
+                    st.write(msg["content"])
     else:
         st.chat_message(msg["role"]).write(msg["content"])
 
-# Get user query from the chat input
-user_query = st.chat_input(placeholder="Ask me anything from the database!")
+
+# Function to execute SQL query every time
+def execute_sql_query(query):
+    with sqlite3.connect("database.db") as con:
+        cur = con.cursor()
+        cur.execute(query)
+        results = cur.fetchall()
+    return results
+
+
+# Function to process user query
+def process_user_query(query):
+    # This function would typically be more complex, integrating logic to form SQL queries based on user input
+    sql_query = f"SELECT * FROM interactions WHERE user_query LIKE '%{query}%'"
+    results = execute_sql_query(sql_query)
+    return results
+
 
 # Action descriptions for prettifying intermediate steps
 action_descriptions = {
@@ -298,9 +442,7 @@ def prettify_intermediate_steps(steps):
                     description = f"**{action_descriptions[tool]}**"
         else:
             if num_steps > 1:
-                description = f"**Step {i}:** \n\n"
-            # else:
-            # description = "**Performed an action.**"
+                description = f"**Step {i}: ** \n\n **Performed an action.**"
 
         prettified_steps.append(
             f"{description}\n\n{query_description if tool == 'sql_db_query' else ''}\n\n**The result of this action returns:** {result}"
@@ -308,7 +450,46 @@ def prettify_intermediate_steps(steps):
     return "\n\n".join(prettified_steps)
 
 
+# Ensure the OpenAI client is correctly instantiated
+client = openai.OpenAI(api_key=st.secrets["openai_api_key"])
+
+
+def explain_intermediate_steps(intermediate_steps):
+    prompt = (
+        "Explain the following steps in simple, natural language for a non-technical user. Start your answer directly with the response and do not interact with the prompt. Do not start with sentences like: Sure! Here are the steps explained in simple language:"
+        "Use the first person when explaining like for example: I checked the databases available. Before every step, write the step and its corresponding number."
+        "Also, only if the following steps contain SQL query, please provide it in a code block format that users can try out themselves. Do not provide any SQL statements starting with CREATE TABLE:\n\n"
+        f"{intermediate_steps}"
+    )
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a helpful assistant. You explain the steps in simple, natural language for a non-technical user. Start your answer directly with the response and do not interact with the prompt. Do not start with sentences like: Sure! Here are the steps explained in simple language:"
+                "Use the first person when explaining like for example: I checked the databases available. Before every step, write the step and its corresponding number."
+                "Also, only if the following steps contain SQL query, please provide it in a code block format that users can try. Do not display any SQL statements starting with CREATE TABLE, write only the ones starting with SELECT",
+            },
+            {"role": "user", "content": prompt},
+        ],
+        max_tokens=1000,
+        temperature=0.1,  # Set the temperature to a low value for precise responses
+    )
+    message = response.choices[0].message.content.strip()
+    return message
+
+
+# Get user query from the chat input
+user_query = st.chat_input(placeholder="Ask me anything from the database!")
+
 if user_query:
+    # Record timestamp for when the user query is sent
+    user_query_sent_time = pd.Timestamp.now()
+
+    # Increment the question counter for the session
+    st.session_state["question_counter"] += 1
+    question_id = st.session_state["question_counter"]
+
     # Append user query to the session state
     st.session_state.messages.append({"role": "user", "content": user_query})
     st.chat_message("user").write(user_query)
@@ -317,7 +498,7 @@ if user_query:
     msgs.add_user_message(user_query)
 
     # Calculate current tokens and truncate message history if necessary
-    max_total_tokens = 4096  # Maximum tokens allowed by the model
+    max_total_tokens = 14600  # Maximum tokens allowed by the model
     reserved_tokens = 1000  # Reserve tokens for the current query and response
     prompt_tokens = count_tokens(
         msgs.messages + [type("msg", (object,), {"content": user_query})()]
@@ -342,6 +523,9 @@ if user_query:
     # Extract response content
     response_content = response["output"]
 
+    # Record timestamp for when the response is displayed
+    response_displayed_time = pd.Timestamp.now()
+
     # Append the assistant's response to the session state
     st.session_state.messages.append({"role": "assistant", "content": response_content})
     st.chat_message("assistant").write(response_content)
@@ -351,39 +535,66 @@ if user_query:
 
     # Prettify intermediate steps
     inter_steps = response["intermediate_steps"]
+    prettified_inter_steps = prettify_intermediate_steps(inter_steps)
+
+    # Add a spinner for generating explanation
+    with st.spinner(text="Generating explanation..."):
+        simplified_intermediate_steps = explain_intermediate_steps(prettified_inter_steps)
+
+    # Record timestamp for when the explanation button is displayed
+    explanation_button_displayed_time = pd.Timestamp.now()
+
+    # Save both the original intermediate steps and the simplified explanation along with timestamps
+    save_interaction(
+        session_id,
+        question_id,
+        user_query,
+        response_content,
+        prettified_inter_steps,
+        simplified_intermediate_steps,
+        user_query_sent_time,
+        response_displayed_time,
+        explanation_button_displayed_time,
+    )
 
     if inter_steps:
-        prettified_inter_steps = prettify_intermediate_steps(inter_steps)
-
-        # Save the whole expander content in the session state
-        expander_content = f"**See explanation**\n{prettified_inter_steps}"
+        # Update session state with simplified steps
         st.session_state.messages.append(
             {
                 "role": "assistant",
-                "expander": "**See explanation**",
-                "content": prettified_inter_steps,
+                "expander": "See explanation",
+                "content": simplified_intermediate_steps,
+                "interaction_id": question_id,
             }
         )
 
-        # Display intermediate steps in an expander
-        with st.expander("**See explanation**"):
-            st.write(prettified_inter_steps)
+        # Display intermediate steps with a button to see the explanation
+        if st.button(
+            "See explanation",
+            key=f"button_{question_id}",
+            on_click=lambda id=question_id: handle_explanation_click(id),
+        ):
+            st.session_state[f"expander_{question_id}"] = True
+            with st.expander("See explanation", expanded=True):
+                st.write(simplified_intermediate_steps)
     else:
         # Display message if no intermediate steps are provided
         no_explanation_message = (
-            "**The agent does not provide any further explanations for its response.**"
+            "**The agent does not provide any further explanation for its response.**"
         )
         st.session_state.messages.append(
             {
                 "role": "assistant",
-                "expander": "**See explanation**",
+                "expander": "See explanation",
                 "content": no_explanation_message,
+                "interaction_id": question_id,
             }
         )
-        with st.expander("**See explanation**"):
-            st.write(no_explanation_message)
-
-
-# Draw the messages at the end, so newly generated ones show up immediately
-# with view_messages:
-#    view_messages.json(st.session_state.langchain_messages)
+        if st.button(
+            "See explanation",
+            key=f"button_{question_id}",
+            on_click=lambda id=question_id: handle_explanation_click(id),
+        ):
+            st.session_state[f"expander_{question_id}"] = True
+            with st.expander("See explanation", expanded=True):
+                st.write(no_explanation_message)

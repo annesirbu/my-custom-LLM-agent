@@ -1,3 +1,5 @@
+# without sending the intermediate steps to Chat GPT
+
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -17,6 +19,20 @@ from langchain_community.chat_message_histories import StreamlitChatMessageHisto
 from langchain_community.agent_toolkits import create_sql_agent, SQLDatabaseToolkit
 from langchain.agents.agent_types import AgentType
 import tiktoken
+import subprocess
+import sys
+import uuid
+
+
+# Ensure necessary packages are installed
+def install_package(package):
+    subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+
+
+try:
+    import openpyxl
+except ImportError:
+    install_package("openpyxl")
 
 # Database connection
 conn = sqlite3.connect("interactions.db")
@@ -26,7 +42,8 @@ c = conn.cursor()
 c.execute(
     """
     CREATE TABLE IF NOT EXISTS interactions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT,
+        id INTEGER,
         user_query TEXT,
         assistant_response TEXT,
         intermediate_steps TEXT,
@@ -39,34 +56,43 @@ conn.commit()
 
 
 # Function to save interaction
-def save_interaction(user_query, assistant_response, intermediate_steps):
+def save_interaction(session_id, question_id, user_query, assistant_response, intermediate_steps):
     c.execute(
         """
-        INSERT INTO interactions (user_query, assistant_response, intermediate_steps)
-        VALUES (?, ?, ?)
+        INSERT INTO interactions (session_id, id, user_query, assistant_response, intermediate_steps)
+        VALUES (?, ?, ?, ?, ?)
     """,
-        (user_query, assistant_response, intermediate_steps),
+        (session_id, question_id, user_query, assistant_response, intermediate_steps),
     )
     conn.commit()
-    return c.lastrowid
 
 
 # Function to update explanation clicked
-def update_explanation_clicked(interaction_id):
+def update_explanation_clicked(session_id, question_id):
     c.execute(
         """
         UPDATE interactions
         SET explanation_clicked = 1
-        WHERE id = ?
+        WHERE session_id = ? AND id = ?
     """,
-        (interaction_id,),
+        (session_id, question_id),
     )
     conn.commit()
 
 
 # Streamlit app setup
-st.set_page_config(page_title="Custom LLM with Excel DB")
-st.title("Custom LLM with Excel DB 📈")
+st.set_page_config(page_title="Data Assistant")
+st.title("Data Assistant 📈")
+
+# Assign a unique session ID if it doesn't exist
+if "session_id" not in st.session_state:
+    st.session_state["session_id"] = str(uuid.uuid4())
+
+# Initialize question counter for the session
+if "question_counter" not in st.session_state:
+    st.session_state["question_counter"] = 0
+
+session_id = st.session_state["session_id"]
 
 # Get an OpenAI API Key from secrets.toml
 if "openai_api_key" in st.secrets:
@@ -85,7 +111,7 @@ view_messages = st.expander("View the message contents in session state")
 
 # Function to count tokens using tiktoken
 def count_tokens(messages):
-    encoding = tiktoken.encoding_for_model("gpt-3.5-turbo")
+    encoding = tiktoken.encoding_for_model("gpt-4o-mini")
     total_tokens = sum([len(encoding.encode(msg.content)) for msg in messages])
     return total_tokens
 
@@ -119,7 +145,7 @@ To start you should ALWAYS look at the tables in the database to see what you ca
 Do NOT skip this step.
 Then you should query the schema of the most relevant tables.
 
-When reacting react to basic conversation:
+When reacting to basic conversation:
 - Respond to greetings such as "Hello" or "Hi".
 - Answer basic questions like "How are you?" with a friendly tone.
 - Remind the user that you are an SQL agent and that you can help them interact with the database.
@@ -148,6 +174,7 @@ SELECT SUM(Sales) AS Total_Sales, SUM(Profit) AS Total_Profit FROM Orders WHERE 
 When generating responses, please use the word "dollars" instead of the dollar sign "$". For example, if the total sales amount is 183,939.98, the response should be "183,939.98 dollars" instead of "$183,939.98$".
 
 When Formatting Responses:
+- Provide paragraph texts that are easy to understand for humans as your response
 - Use a clear , user friendly way to visualize the response.
 - If the user asks for a summary or a count, provide a single answer.
 - If the user asks for a list of items (e.g., "List all categories" or "Show all orders from 2021"), format the response as a list.
@@ -155,6 +182,48 @@ When Formatting Responses:
 - Clearly format financial figures on separate lines for readability using new lines.
 - If the output is too large, display only the first 5 entries by default and inform the user.
 - If the question does not seem related to the database, just return "The query does not relate to the database" as the answer.
+For example:
+User: What are the total sales and profit for the "Office Supplies" category in 2021?
+SQL Agent: The total sales for the "Office Supplies" category in 2021 is 183,939.98 dollars.
+The total profit for the "Office Supplies" category in 2021 is 35,061.23 dollars.
+
+Another example:
+User: Find the orders from the "West" region along with the name of the regional manager.
+SQL Agent: Here are the first 5 orders from the "West" region along with the name of the regional manager:
+
+Order ID: CA-2021-138688
+Product Name: Self-Adhesive Address Labels for Typewriters by Universal
+Sales: 14.62 dollars
+Profit: 6.87 dollars
+Regional Manager: Sadie Pawthorne
+
+Order ID: CA-2019-115812
+Product Name: Eldon Expressions Wood and Plastic Desk Accessories, Cherry Wood
+Sales: 48.86 dollars
+Profit: 14.17 dollars
+Regional Manager: Sadie Pawthorne
+
+Order ID: CA-2019-115812
+Product Name: Newell 322
+Sales: 7.28 dollars
+Profit: 1.97 dollars
+Regional Manager: Sadie Pawthorne
+
+Order ID: CA-2019-115812
+Product Name: Mitel 5320 IP Phone VoIP phone
+Sales: 907.15 dollars
+Profit: 90.72 dollars
+Regional Manager: Sadie Pawthorne
+
+Order ID: CA-2019-115812
+Product Name: DXL Angle-View Binders with Locking Rings by Samsill
+Sales: 18.50 dollars
+Profit: 5.78 dollars
+Regional Manager: Sadie Pawthorne
+
+If you need more entries, please specify the number of entries you want to retrieve.
+
+Additionally, provide clear and concise natural language explanations in the intermediate_steps for each step you take and the reasons behind those actions. This will help non-programmers understand your thought process and how you arrived at the final answer.
 """
 
 # Additional instructions for the AI on the next steps after receiving the input question
@@ -173,8 +242,8 @@ messages = [
 
 prompt = ChatPromptTemplate.from_messages(messages)
 
-# Specify the model name gpt-3.5-turbo in ChatOpenAI
-chain = prompt | ChatOpenAI(api_key=openai_api_key, model="gpt-3.5-turbo")
+# Specify the model name gpt-4o-mini in ChatOpenAI
+chain = prompt | ChatOpenAI(api_key=openai_api_key, model="gpt-4o-mini")
 chain_with_history = RunnableWithMessageHistory(
     chain,
     lambda session_id: msgs,
@@ -183,7 +252,7 @@ chain_with_history = RunnableWithMessageHistory(
 )
 
 # Setup agent for SQL
-llm = ChatOpenAI(api_key=openai_api_key, model="gpt-3.5-turbo", temperature=0, streaming=True)
+llm = ChatOpenAI(api_key=openai_api_key, model="gpt-4o-mini", temperature=0, streaming=True)
 
 
 # Function to read Excel file into SQLite file-based database
@@ -197,12 +266,6 @@ def excel_to_sqlite(file_path):
     for sheet_name in xls.sheet_names:
         df = xls.parse(sheet_name)
 
-        # Ensure 'Order Date' is in the correct datetime format
-        if "Order Date" in df.columns:
-            df["Order Date"] = pd.to_datetime(df["Order Date"], errors="coerce").dt.strftime(
-                "%Y-%m-%d %H:%M:%S"
-            )
-
         df.to_sql(sheet_name, con, index=False, if_exists="replace")  # Load each sheet into SQLite
     con.close()
 
@@ -214,7 +277,7 @@ def excel_to_sqlite(file_path):
 
 
 # Read the Excel file from the project folder
-file_path = Path("streamlit_agent/(US)Sample-Superstore.xls")
+file_path = Path("streamlit_agent/(US)Sample-Superstore.xlsx")
 db = excel_to_sqlite(file_path)  # Load the Excel file into the SQLite file-based database
 
 toolkit = SQLDatabaseToolkit(db=db, llm=llm)
@@ -230,6 +293,7 @@ agent = create_sql_agent(
 
 def clear_message_history():
     st.session_state.pop("messages", None)
+    st.session_state["question_counter"] = 0
     msgs.clear()
 
 
@@ -239,30 +303,48 @@ if "messages" not in st.session_state or st.sidebar.button(
 ):
     st.session_state["messages"] = [{"role": "assistant", "content": "How can I help you?"}]
 
+
+# Function to handle explanation click event
+def handle_explanation_click(interaction_id):
+    update_explanation_clicked(session_id, interaction_id)
+    st.session_state[f"expander_{interaction_id}"] = True
+
+
 # Display all messages from the session state
-for msg in st.session_state.messages:
+for msg in st.session_state.get("messages", []):
     if "expander" in msg:
         interaction_id = msg.get("interaction_id")
         if st.session_state.get(f"expander_{interaction_id}", False):
-            with st.expander(msg["expander"]):
+            with st.expander(msg["expander"], expanded=True):
                 st.write(msg["content"])
         else:
             if st.button(
                 "See explanation",
                 key=f"button_{interaction_id}",
-                on_click=lambda: handle_explanation_click(interaction_id),
+                on_click=lambda id=interaction_id: handle_explanation_click(id),
             ):
                 st.session_state[f"expander_{interaction_id}"] = True
-                with st.expander(msg["expander"]):
+                with st.expander(msg["expander"], expanded=True):
                     st.write(msg["content"])
     else:
         st.chat_message(msg["role"]).write(msg["content"])
 
 
-# Function to handle explanation click event
-def handle_explanation_click(interaction_id):
-    update_explanation_clicked(interaction_id)
-    st.session_state[f"expander_{interaction_id}"] = True
+# Function to execute SQL query every time
+def execute_sql_query(query):
+    with sqlite3.connect("database.db") as con:
+        cur = con.cursor()
+        cur.execute(query)
+        results = cur.fetchall()
+    return results
+
+
+# Function to process user query
+def process_user_query(query):
+    # This function would typically be more complex, integrating logic to form SQL queries based on user input
+    sql_query = f"SELECT * FROM interactions WHERE user_query LIKE '%{query}%'"
+    results = execute_sql_query(sql_query)
+    return results
 
 
 # Get user query from the chat input
@@ -312,8 +394,6 @@ def prettify_intermediate_steps(steps):
         else:
             if num_steps > 1:
                 description = f"**Step {i}: ** \n\n **Performed an action.**"
-            else:
-                description = "**Performed an action.**"
 
         prettified_steps.append(
             f"{description}\n\n{query_description if tool == 'sql_db_query' else ''}\n\n**The result of this action returns:** {result}"
@@ -322,6 +402,10 @@ def prettify_intermediate_steps(steps):
 
 
 if user_query:
+    # Increment the question counter for the session
+    st.session_state["question_counter"] += 1
+    question_id = st.session_state["question_counter"]
+
     # Append user query to the session state
     st.session_state.messages.append({"role": "user", "content": user_query})
     st.chat_message("user").write(user_query)
@@ -330,7 +414,7 @@ if user_query:
     msgs.add_user_message(user_query)
 
     # Calculate current tokens and truncate message history if necessary
-    max_total_tokens = 4096  # Maximum tokens allowed by the model
+    max_total_tokens = 16400  # Maximum tokens allowed by the model
     reserved_tokens = 1000  # Reserve tokens for the current query and response
     prompt_tokens = count_tokens(
         msgs.messages + [type("msg", (object,), {"content": user_query})()]
@@ -365,8 +449,12 @@ if user_query:
     # Prettify intermediate steps
     inter_steps = response["intermediate_steps"]
 
-    interaction_id = save_interaction(
-        user_query, response_content, prettify_intermediate_steps(inter_steps)
+    save_interaction(
+        session_id,
+        question_id,
+        user_query,
+        response_content,
+        prettify_intermediate_steps(inter_steps),
     )
 
     if inter_steps:
@@ -379,18 +467,18 @@ if user_query:
                 "role": "assistant",
                 "expander": "See explanation",
                 "content": prettified_inter_steps,
-                "interaction_id": interaction_id,
+                "interaction_id": question_id,
             }
         )
 
         # Display intermediate steps with a button to see the explanation
         if st.button(
             "See explanation",
-            key=f"button_{interaction_id}",
-            on_click=lambda: handle_explanation_click(interaction_id),
+            key=f"button_{question_id}",
+            on_click=lambda id=question_id: handle_explanation_click(id),
         ):
-            st.session_state[f"expander_{interaction_id}"] = True
-            with st.expander("See explanation"):
+            st.session_state[f"expander_{question_id}"] = True
+            with st.expander("See explanation", expanded=True):
                 st.write(prettified_inter_steps)
     else:
         # Display message if no intermediate steps are provided
@@ -402,14 +490,14 @@ if user_query:
                 "role": "assistant",
                 "expander": "See explanation",
                 "content": no_explanation_message,
-                "interaction_id": interaction_id,
+                "interaction_id": question_id,
             }
         )
         if st.button(
             "See explanation",
-            key=f"button_{interaction_id}",
-            on_click=lambda: handle_explanation_click(interaction_id),
+            key=f"button_{question_id}",
+            on_click=lambda id=question_id: handle_explanation_click(id),
         ):
-            st.session_state[f"expander_{interaction_id}"] = True
-            with st.expander("See explanation"):
+            st.session_state[f"expander_{question_id}"] = True
+            with st.expander("See explanation", expanded=True):
                 st.write(no_explanation_message)
