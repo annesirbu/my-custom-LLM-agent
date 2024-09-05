@@ -397,8 +397,8 @@ def handle_explanation_click(interaction_id):
 
 # Display all messages from the session state
 
-# if treatment == 2:
-if treatment is None:
+if treatment == 2:
+    # if treatment is None:
     for msg in st.session_state.get("messages", []):
         if "expander" in msg:
             interaction_id = msg.get("interaction_id")
@@ -589,8 +589,8 @@ if user_query:
     explanation_clicked_time = None
     explanation_displayed_time = None
 
-    # if treatment == 2:
-    if treatment is None:
+    if treatment == 2:
+        # if treatment is None:
         explanation_button_displayed_time = pd.Timestamp.now()
         if inter_steps:
             # Update session state with simplified steps
