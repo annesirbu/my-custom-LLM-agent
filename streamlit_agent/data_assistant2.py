@@ -38,7 +38,7 @@ except ImportError:
 conn = sqlite3.connect("interactions.db")
 c = conn.cursor()
 
-# Alter the table to include the participant_id if they do not exist
+# Alter the table to include the participant_id, treatment, and explanation_displayed if they do not exist
 c.execute(
     """
     CREATE TABLE IF NOT EXISTS interactions (
@@ -56,21 +56,20 @@ c.execute(
         explanation_button_displayed_time DATETIME,
         explanation_clicked_time DATETIME,
         explanation_clicked BOOLEAN DEFAULT 0,
-        explanation_displayed_time DATETIME
+        explanation_displayed DATETIME
     )
 """
 )
 
-
-# Check if participant_id exists, and add it if not
+# Check if the required columns exist, and add them if not
 c.execute("PRAGMA table_info(interactions)")
 columns = [column[1] for column in c.fetchall()]
 if "participant_id" not in columns:
     c.execute("ALTER TABLE interactions ADD COLUMN participant_id TEXT")
 if "treatment" not in columns:
     c.execute("ALTER TABLE interactions ADD COLUMN treatment TEXT")
-if "explanation_displayed_time" not in columns:
-    c.execute("ALTER TABLE interactions ADD COLUMN explanation_displayed_time DATETIME")
+if "explanation_displayed" not in columns:
+    c.execute("ALTER TABLE interactions ADD COLUMN explanation_displayed DATETIME")
 conn.commit()
 
 
@@ -87,7 +86,9 @@ def save_interaction(
     user_query_sent_time,
     response_displayed_time,
     explanation_button_displayed_time,
-    explanation_displayed_time,
+    explanation_clicked_time,
+    explanation_clicked,
+    explanation_displayed,
 ):
     intermediate_steps_str = str(intermediate_steps)  # Convert to string
     simplified_intermediate_steps_str = str(simplified_intermediate_steps)  # Convert to string
@@ -102,14 +103,17 @@ def save_interaction(
         if explanation_button_displayed_time
         else None
     )
+    explanation_clicked_time_str = (
+        explanation_clicked_time.strftime("%Y-%m-%d %H:%M:%S") if explanation_clicked_time else None
+    )
     explanation_displayed_time_str = (
-        explanation_displayed.strftime("%Y-%m-%d %H:%M:%S") if explanation_displayed_time else None
+        explanation_displayed.strftime("%Y-%m-%d %H:%M:%S") if explanation_displayed else None
     )
 
     c.execute(
         """
-            INSERT INTO interactions (session_id, id, participant_id, treatment, user_query, assistant_response, intermediate_steps, simplified_intermediate_steps, user_query_sent_time, response_displayed_time, explanation_button_displayed_time, explanation_displayed_time)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO interactions (session_id, id, participant_id, treatment, user_query, assistant_response, intermediate_steps, simplified_intermediate_steps, user_query_sent_time, response_displayed_time, explanation_button_displayed_time, explanation_clicked_time, explanation_clicked, explanation_displayed_time)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             session_id,
@@ -123,6 +127,8 @@ def save_interaction(
             user_query_sent_time_str,
             response_displayed_time_str,
             explanation_button_displayed_time_str,
+            explanation_clicked_time_str,
+            explanation_clicked,
             explanation_displayed_time_str,
         ),
     )
@@ -391,16 +397,21 @@ for msg in st.session_state.get("messages", []):
     if "expander" in msg:
         interaction_id = msg.get("interaction_id")
         if st.session_state.get(f"expander_{interaction_id}", False):
-            with st.expander(msg["expander"], expanded=True):
+            with st.expander(msg.get("expander", "See explanation"), expanded=True):
                 st.write(msg["content"])
         else:
-            if st.button(
-                "See explanation",
-                key=f"button_{interaction_id}",
-                on_click=lambda id=interaction_id: handle_explanation_click(id),
-            ):
-                st.session_state[f"expander_{interaction_id}"] = True
-                with st.expander(msg["expander"], expanded=True):
+            if treatment == "2":
+                if st.button(
+                    "See explanation",
+                    key=f"button_{interaction_id}",
+                    on_click=lambda id=interaction_id: handle_explanation_click(id),
+                ):
+                    st.session_state[f"expander_{interaction_id}"] = True
+                    with st.expander(msg.get("expander", "See explanation"), expanded=True):
+                        st.write(msg["content"])
+            else:
+                # For treatment=1 or None, display the expander collapsed by default
+                with st.expander(msg.get("expander", "See explanation"), expanded=False):
                     st.write(msg["content"])
     else:
         st.chat_message(msg["role"]).write(msg["content"])
@@ -554,9 +565,6 @@ if user_query:
     st.session_state.messages.append({"role": "assistant", "content": response_content})
     st.chat_message("assistant").write(response_content)
 
-    # Save AI response in history
-    msgs.add_ai_message(response_content)
-
     # Prettify intermediate steps
     inter_steps = response["intermediate_steps"]
     prettified_inter_steps = prettify_intermediate_steps(inter_steps)
@@ -565,10 +573,96 @@ if user_query:
     with st.spinner(text="Generating explanation..."):
         simplified_intermediate_steps = explain_intermediate_steps(prettified_inter_steps)
 
-    # Record timestamp for when the explanation button is displayed
-    explanation_button_displayed_time = pd.Timestamp.now()
+    explanation_clicked_time = None
+    explanation_clicked = None
+    explanation_button_displayed_time = None
+    explanation_displayed = None
 
-    # Save both the original intermediate steps and the simplified explanation along with timestamps
+    # Define fallback message for no explanation
+    no_explanation_message = (
+        "**The agent does not provide any further explanation for its response.**"
+    )
+
+    # Handle display and saving based on treatment and whether inter_steps are available
+    if inter_steps:
+        # Handle user-invoked explanation via button
+        if treatment == "2":
+            explanation_button_displayed_time = pd.Timestamp.now()
+
+            # Display intermediate steps with a button to see the explanation
+            if st.button("See explanation", key=f"button_{question_id}"):
+                explanation_clicked_time = pd.Timestamp.now()
+                explanation_clicked = 1
+                explanation_displayed = explanation_clicked_time
+                with st.expander("See explanation", expanded=True):
+                    st.write(simplified_intermediate_steps)
+
+                # Append the explanation to the chat history (using button format)
+                st.session_state.messages.append(
+                    {
+                        "role": "assistant",
+                        "expander": "See explanation",
+                        "content": simplified_intermediate_steps,
+                        "interaction_id": question_id,
+                    }
+                )
+
+        else:
+            # For treatment=1 or None (automatic explanations), display via expander
+            explanation_displayed = pd.Timestamp.now()
+            with st.expander("See explanation", expanded=True):
+                st.write(simplified_intermediate_steps)
+
+            # Append the explanation to the chat history with expander
+            st.session_state.messages.append(
+                {
+                    "role": "assistant",
+                    "expander": "See explanation",
+                    "content": simplified_intermediate_steps,
+                    "interaction_id": question_id,
+                }
+            )
+
+    else:
+        # Handle case where no intermediate steps are provided
+        if treatment == "2":
+            explanation_button_displayed_time = pd.Timestamp.now()
+
+            # Display the fallback message with a button to see the explanation
+            if st.button("See explanation", key=f"button_{question_id}"):
+                explanation_clicked_time = pd.Timestamp.now()
+                explanation_clicked = 1
+                explanation_displayed = explanation_clicked_time
+                with st.expander("See explanation", expanded=True):
+                    st.write(no_explanation_message)
+
+                # Append the no explanation message to the chat history (using button format)
+                st.session_state.messages.append(
+                    {
+                        "role": "assistant",
+                        "expander": "See explanation",
+                        "content": no_explanation_message,
+                        "interaction_id": question_id,
+                    }
+                )
+
+        else:
+            # For treatment=1 or None, display the fallback message in an expander
+            explanation_displayed = pd.Timestamp.now()
+            with st.expander("See explanation", expanded=True):
+                st.write(no_explanation_message)
+
+            # Append the no explanation message to the chat history with expander
+            st.session_state.messages.append(
+                {
+                    "role": "assistant",
+                    "expander": "See explanation",
+                    "content": no_explanation_message,
+                    "interaction_id": question_id,
+                }
+            )
+
+    # Save interaction to the database
     save_interaction(
         session_id,
         question_id,
@@ -577,51 +671,11 @@ if user_query:
         user_query,
         response_content,
         prettified_inter_steps,
-        simplified_intermediate_steps,
+        simplified_intermediate_steps if inter_steps else no_explanation_message,
         user_query_sent_time,
         response_displayed_time,
         explanation_button_displayed_time,
-        explanation_displayed_time,
+        explanation_clicked_time,
+        explanation_clicked,
+        explanation_displayed,
     )
-
-    if inter_steps:
-        # Update session state with simplified steps
-        st.session_state.messages.append(
-            {
-                "role": "assistant",
-                "expander": "See explanation",
-                "content": simplified_intermediate_steps,
-                "interaction_id": question_id,
-            }
-        )
-
-        # Display intermediate steps with a button to see the explanation
-        if st.button(
-            "See explanation",
-            key=f"button_{question_id}",
-            on_click=lambda id=question_id: handle_explanation_click(id),
-        ):
-            st.session_state[f"expander_{question_id}"] = True
-            with st.expander("See explanation", expanded=True):
-                st.write(simplified_intermediate_steps)
-    else:
-        # Display message if no intermediate steps are provided
-        no_explanation_message = (
-            "**The agent does not provide any further explanation for its response.**"
-        )
-        st.session_state.messages.append(
-            {
-                "role": "assistant",
-                "expander": "See explanation",
-                "content": no_explanation_message,
-                "interaction_id": question_id,
-            }
-        )
-        if st.button(
-            "See explanation",
-            key=f"button_{question_id}",
-            on_click=lambda id=question_id: handle_explanation_click(id),
-        ):
-            st.session_state[f"expander_{question_id}"] = True
-            with st.expander("See explanation", expanded=True):
-                st.write(no_explanation_message)
