@@ -1,8 +1,11 @@
 streamlit
 pandas
+openai
 openpyxl
-sqlalchemy
-tiktoken
+psycopg2
+python-dotenv
 langchain-core
 langchain-openai
 langchain-community
+sqlalchemy
+tiktoken

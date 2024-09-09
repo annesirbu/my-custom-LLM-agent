@@ -10,10 +10,9 @@ ENV POETRY_NO_INTERACTION=1 \
     POETRY_VIRTUALENVS_CREATE=1 \
     POETRY_CACHE_DIR=/tmp/poetry_cache
 
-# A directory to have app data 
+# A directory to have app data
 WORKDIR /app
 
-COPY pyproject.toml poetry.lock ./
 
 RUN poetry install --without dev --no-root && rm -rf $POETRY_CACHE_DIR
 
@@ -27,5 +26,4 @@ COPY --from=builder ${VIRTUAL_ENV} ${VIRTUAL_ENV}
 
 COPY ./streamlit_agent ./streamlit_agent
 
-
-CMD ["streamlit", "run", "streamlit_agent/chat_pandas_df.py", "--server.port", "8051"]
+CMD ["streamlit", "run", "streamlit_agent/data_assistant3.py", "--server.port", "8051"]

@@ -1,9 +1,9 @@
 version: '3'
 services:
-  langchain-streamlit-agent:
-    image: langchain-streamlit-agent:latest
+  data-assistant:
+    image: data-assistant:latest
     build: ./app
-    command: streamlit run streamlit_agent/chat_pandas_df.py --server.port 8051
+    command: streamlit run streamlit_agent/data_assistant_old.py --server.port 8051
     volumes:
       - ./streamlit_agent/:/app/streamlit_agent
     ports:

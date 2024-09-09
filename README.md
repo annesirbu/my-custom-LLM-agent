@@ -1,72 +1,48 @@
-# 🦜️🔗 LangChain 🤝 Streamlit agent examples
+# Masther's thesis -  LangChain 🤝 Streamlit agent
 
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/langchain-ai/streamlit-agent?quickstart=1)
+## Chatbot Agent for SQL Database Interaction
 
-This repository contains reference implementations of various LangChain agents as Streamlit apps including:
+This repository contains the code for a chatbot agent that interacts with a SQL database containing sales data from a Superstore data set. The chatbot is capable of answering questions and generating SQL queries based on user inputs. The chatbot has two distinct versions (treatments) based on the provision of explanations:
 
-- `basic_streaming.py`: Simple streaming app with `langchain.chat_models.ChatOpenAI` ([View the app](https://langchain-streaming-example.streamlit.app/))
-- `basic_memory.py`: Simple app using `StreamlitChatMessageHistory` for LLM conversation memory ([View the app](https://langchain-st-memory.streamlit.app/))
-- `mrkl_demo.py`: An agent that replicates the [MRKL demo](https://python.langchain.com/docs/modules/agents/how_to/mrkl) ([View the app](https://langchain-mrkl.streamlit.app))
-- `minimal_agent.py`: A minimal agent with search (requires setting `OPENAI_API_KEY` env to run)
-- `search_and_chat.py`: A search-enabled chatbot that remembers chat history ([View the app](https://langchain-chat-search.streamlit.app/))
-- `simple_feedback.py`: A chat app that allows the user to add feedback on responses using [streamlit-feedback](https://github.com/trubrics/streamlit-feedback), and link to the traces in [LangSmith](https://docs.smith.langchain.com/) ([View the app](https://langsmith-simple-feedback.streamlit.app/))
-- `chat_with_documents.py`: Chatbot capable of answering queries by referring custom documents ([View the app](https://langchain-document-chat.streamlit.app/))
-- `chat_with_sql_db.py`: Chatbot which can communicate with your database ([View the app](https://langchain-chat-sql.streamlit.app/))
-- `chat_pandas_df.py`: Chatbot to ask questions about a pandas DF (Note: uses `PythonAstREPLTool` which is vulnerable to arbitrary code execution,
-  see [langchain #7700](https://github.com/langchain-ai/langchain/issues/7700))
+1. Automatic Explanation Version: The chatbot automatically provides an explanation alongside its answer.
+2. User-Invoked Explanation Version: The explanation is only displayed when the user voluntarily clicks a button to expand the explanation.
 
-Apps feature LangChain 🤝 Streamlit integrations such as the
-[Callback integration](https://python.langchain.com/docs/modules/callbacks/integrations/streamlit) and
-[StreamlitChatMessageHistory](https://python.langchain.com/docs/integrations/memory/streamlit_chat_message_history).
 
-## More great app examples
+## Features
 
-Check out some other full examples of apps that utilize LangChain + Streamlit:
+- The chatbot interacts with a PostgreSQL database that contains interaction data, which includes user queries and chatbot responses.
+- Explanations for the chatbot's answers can either be provided automatically or via a button.
+- The content of the explanations is the same in both versions; only the method of provision differs.
 
-- [Auto-graph](https://auto-graph.streamlit.app/) - Build knowledge graphs from user-input text ([Source code](https://github.com/langchain-ai/langchain-benchmarks/blob/main/extraction/streamlit_app.py))
-- [Web Explorer](https://web-explorer.streamlit.app/) - Retrieve and summarize insights from the web ([Source code](https://github.com/langchain-ai/web-explorer))
-- [LangChain Teacher](https://lang-teacher.streamlit.app/) - Learn LangChain from an LLM tutor ([Source code](https://github.com/langchain-ai/langchain-teacher))
-- [Text Splitter Playground](https://langchain-text-splitter.streamlit.app/) - Play with various types of text splitting for RAG ([Source code](https://github.com/langchain-ai/text-split-explorer))
-- [Tweet Generator](https://elon-twitter-clone.streamlit.app/) - Fine tune GPT-3.5 on tweets ([Source code](https://github.com/langchain-ai/twitter-finetune))
+## Setup and Usage
 
-## Setup
+1. Prerequisites
+Python 3.x
+PostgreSQL
+OpenAI API Key
 
-This project uses [Poetry](https://python-poetry.org/) for dependency management.
+2. Environment Variables
+The project uses the following environment variables:
 
-```shell
-# Create Python environment
-$ poetry install
+OPENAI_API_KEY: Your OpenAI API key to enable interaction with GPT models.
+DATABASE_URL: The connection URL for the PostgreSQL database.
 
-# Install git pre-commit hooks
-$ poetry shell
-$ pre-commit install
-```
+Make sure to set these in a .env file or directly in your environment.
 
-## Running
+
+3. Installation
 
 ```shell
-# Run mrkl_demo.py or another app the same way
-$ streamlit run streamlit_agent/mrkl_demo.py
+# Install the required packages
+$ pip install -r requirements.txt
 ```
 
-# Running with Docker
+4. Running
 
-This project includes `Dockerfile` to run the app in Docker container. In order to optimise the Docker Image is optimised for size and building time with cache techniques.
+- Set up your PostgreSQL database and ensure the interactions table is ready.
+- Run the Streamlit application:
 
-To generate Image with `DOCKER_BUILDKIT`, follow below command
-
-```DOCKER_BUILDKIT=1 docker build --target=runtime . -t langchain-streamlit-agent:latest```
-
-1. Run the docker container directly
-
-``docker run -d --name langchain-streamlit-agent -p 8051:8051 langchain-streamlit-agent:latest ``
-
-2. Run the docker container using docker-compose (Recommended)
-
-Edit the Command in `docker-compose` with target streamlit app
-
-``docker-compose up``
-
-## Contributing
-
-We plan to add more agent and chain examples over time and improve the existing ones - PRs welcome! 🚀
+```shell
+# Install the required packages
+$ streamlit run streamlit_agent/data_assistant_final.py
+```
